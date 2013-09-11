@@ -105,159 +105,57 @@ specified domains.  Everything else goes to Google DNS (or can
 easily go to your ISP DNS).
 
 ##Your own DNS Server##
-I am running bind9 on my VPS to override the DNS resolution for the
-entire domains mentioned in the Tomato-based router configuration
-above.  The plan is to send the external IP address of my VPS as
-the resolved IP address for any of those domains.
 
-Once the web traffic hits my VPS, I use iptables to redirect port
-80/443 traffic to
+I am running unbound on my VPS to override the DNS resolution for the domains
+mentioned in the Tomato-based router configuration above. I used unbound because
+it allows just overriding part of the domain, which allows media subdomains to
+be forwarded to the original name servers. The plan is to send the external IP
+address of my VPS as the resolved IP address for any of the overridden domains.
+
+Once the web traffic hits my VPS, it will hit
 [HTTPS-SNI-Proxy](https://github.com/dlundquist/HTTPS-SNI-Proxy)
-running on port 8080/8443.
+running on port 80/443.
 
-Here is the bind9 config:
+Here is the unbound config:
 
-`/etc/bind/named.conf.options`
-```nginx
-options {
-    directory "/var/cache/bind";
-	forwarders {
-        # these are the DNS servers from the VPS provider (look in /etc/resolv.conf if yours are different)
-		199.195.255.68;
-		199.195.255.69;
-	};
+TODO: only netflix and pandora created so far.
 
-	auth-nxdomain no;    # conform to RFC1035
-	listen-on-v6 { any; };
-	allow-query { trusted; };
-	allow-recursion { trusted; };
-	recursion yes;
-	dnssec-enable no;
-	dnssec-validation no;
-};
+`/etc/unbound/unbound.conf`
 ```
-`/etc/bind/named.conf.local`
-```nginx
-//
-// Do any local configuration here
-//
+server:
+    directory: "/etc/unbound"
+    username: unbound
+    chroot: "/etc/unbound"
+    pidfile: "/etc/unbound/unbound.pid"
+    interface: 0.0.0.0
+    access-control: 199.195.255.68/31 allow
 
-// Consider adding the 1918 zones here, if they are not used in your
-// organization
-//include "/etc/bind/zones.rfc1918";
+    local-zone: "netflix.com." transparent
+    local-data: "netflix.com. IN A 199.x.x.x"
+    local-data: "movies.netflix.com. IN A 199.x.x.x"
+    local-data: "moviecontrol.netflix.com. IN A 199.x.x.x"
+    local-data: "cbp-us.nccp.netflix.com. IN A 199.x.x.x"
 
-include "/etc/bind/rndc.key";
-
-acl "trusted" {
-    172.y.y.y;        // local venet0:17 internal IP here
-    127.0.0.1;
-    173.z.z.z;        // Your ISP IP here (cable/DSL)
-};
-
-include "/etc/bind/zones.override";
-
-logging {
-    channel bind_log {
-        file "/var/log/named/named.log" versions 5 size 30m;
-        severity info;
-        print-time yes;
-        print-severity yes;
-        print-category yes;
-    };
-    category default { bind_log; };
-    category queries { bind_log; };
-};
+    local-zone: "pandora.com." transparent
+    local-data: "pandora.com. IN A 199.x.x.x"
+    local-data: "www.pandora.com. IN A 199.x.x.x"
+    local-data: "help.pandora.com. IN A 199.x.x.x"
+    local-data: "blog.pandora.com. IN A 199.x.x.x"
 ```
-`/etc/bind/zones.override`
-```nginx
-zone "hulu.com." {
-    type master;
-    file "/etc/bind/db.override";
-};
-zone "huluim.com." {
-    type master;
-    file "/etc/bind/db.override";
-};
-zone "netflix.com." {
-    type master;
-    file "/etc/bind/db.override";
-};
-zone "abc.com." {
-    type master;
-    file "/etc/bind/db.override";
-};
-zone "abc.go.com." {
-    type master;
-    file "/etc/bind/db.override";
-};
-zone "fox.com." {
-    type master;
-    file "/etc/bind/db.override";
-};
-zone "link.theplatform.com." {
-    type master;
-    file "/etc/bind/db.override";
-};
-zone "nbc.com." {
-    type master;
-    file "/etc/bind/db.override";
-};
-zone "nbcuni.com." {
-    type master;
-    file "/etc/bind/db.override";
-};
-zone "pandora.com." {
-    type master;
-    file "/etc/bind/db.override";
-};
-zone "broadband.espn.go.com." {
-    type master;
-    file "/etc/bind/db.override";
-};
-zone "ip2location.com." {
-    type master;
-    file "/etc/bind/db.override";
-};
-```
-`/etc/bind/db.override`
-```
-;
-; BIND data file for overridden IPs
-;
-$TTL  86400
-@   IN  SOA ns1 root (
-            2012100401  ; serial
-            604800      ; refresh 1w
-            86400       ; retry 1d
-            2419200     ; expiry 4w
-            86400       ; minimum TTL 1d
-            )
-
-; need atleast a nameserver
-    IN  NS  ns1
-; specify nameserver IP address
-ns1 IN  A   199.x.x.x                ; external IP from venet0:0
-; provide IP address for domain itself
-@   IN  A   199.x.x.x                ; external IP from venet0:0
-; resolve everything with the same IP address as ns1
-*   IN  A   199.x.x.x                 ; external IP from venet0:0
-```
-When you discover a new domain that you want to "master", simply
-add it to the `zones.override` file and restart bind9.
 
 ##HTTPS-SNI-Proxy##
 Install according to the instructions on
 [HTTPS-SNI-Proxy](https://github.com/dlundquist/HTTPS-SNI-Proxy)
 
-`/etc/sni_proxy.conf`
-```sni_proxy.conf
+`/etc/sniproxy.conf`
+```sniproxy.conf
 # grep '^[^#]' /etc/sni_proxy.conf
 user daemon
-listener 172.y.y.y 8080 {
+listener 172.y.y.y 80 {
     proto http
     table http
 }
-listener 172.y.y.y 8443 {
+listener 172.y.y.y 443 {
     proto tls
     table https
 }
@@ -276,17 +174,16 @@ table "https" {
     ip2location\.com * 443
 }
 ```
-##Iptables##
-`172.y.y.y` is the venet0:17 internal IP address. `173.x.x.x` is your ISP
-address provided by Cable or DSL.
+##Firewall##
 
-For the `filter` table (which is the default):
+I used ufw to manage the firewall rules, it's simple. (I also allow SSH, so I'll
+include it because if you forget you'll not be able to connect).
+
 ```bash
-iptables -A INPUT -i venet0 -s 173.x.x.x -d 172.y.y.y -p tcp -m tcp --dport 8080 -j ACCEPT
-iptables -A INPUT -i venet0 -s 173.x.x.x -d 172.y.y.y -p tcp -m tcp --dport 8443 -j ACCEPT
-```
-For the `nat` table:
-```bash
-iptables -t nat -A PREROUTING -i venet0 -p tcp --dport 80 -j DNAT --to 172.y.y.y:8080
-iptables -t nat -A PREROUTING -i venet0 -p tcp --dport 443 -j DNAT --to 172.y.y.y:8443
+sudo apt-get install ufw
+sudo ufw allow 22/tcp
+sudo ufw allow from 199.195.255.68/31 to any port 53 proto udp
+sudo ufw allow from 199.195.255.68/31 to any port 80 proto tcp
+sudo ufw allow from 199.195.255.68/31 to any port 443 proto tcp
+sudo ufw enable
 ```
